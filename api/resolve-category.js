@@ -18,21 +18,33 @@ export default async function handler(req, res) {
         // Zendesk Ultimate sometimes wraps everything in requestParameters
         const body = rawBody.requestParameters || rawBody;
 
-        const { categories, input } = body;
+let { categories, input } = body;
 
-        // Debug information (remove later if you want)
-        if (!Array.isArray(categories)) {
-            return res.status(400).json({
-                success: false,
-                message: "categories must be an array",
-                debug: {
-                    body: rawBody,
-                    bodyType: typeof rawBody,
-                    categoriesType: typeof categories,
-                    isArray: Array.isArray(categories)
-                }
-            });
+/* Zendesk sends arrays as JSON strings */
+if (typeof categories === "string") {
+    try {
+        categories = JSON.parse(categories);
+    } catch (e) {
+        return res.status(400).json({
+            success: false,
+            message: "Unable to parse categories JSON",
+            received: categories,
+            error: e.message
+        });
+    }
+}
+
+if (!Array.isArray(categories)) {
+    return res.status(400).json({
+        success: false,
+        message: "categories must be an array",
+        debug: {
+            categories,
+            categoriesType: typeof categories,
+            isArray: Array.isArray(categories)
         }
+    });
+}
 
         if (!input) {
             return res.status(400).json({
