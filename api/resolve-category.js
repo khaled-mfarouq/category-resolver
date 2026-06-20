@@ -18,30 +18,30 @@ export default async function handler(req, res) {
         // Zendesk Ultimate sometimes wraps everything in requestParameters
         const body = rawBody.requestParameters || rawBody;
 
-let { category_text_list_id, cat_id_user_input } = body;
+let { categories, cat_id_user_input } = body;
 
 /* Zendesk sends arrays as JSON strings */
-if (typeof category_text_list_id === "string") {
+if (typeof categories === "string") {
     try {
-        category_text_list_id = JSON.parse(category_text_list_id);
+        categories = JSON.parse(categories);
     } catch (e) {
         return res.status(400).json({
             success: false,
-            message: "Unable to parse category_text_list_id JSON",
-            received: category_text_list_id,
+            message: "Unable to parse categories JSON",
+            received: categories,
             error: e.message
         });
     }
 }
 
-if (!Array.isArray(category_text_list_id)) {
+if (!Array.isArray(categories)) {
     return res.status(400).json({
         success: false,
-        message: "category_text_list_id must be an array",
+        message: "categories must be an array",
         debug: {
-            category_text_list_id,
-            categoriesType: typeof category_text_list_id,
-            isArray: Array.isArray(category_text_list_id)
+            categories,
+            categoriesType: typeof categories,
+            isArray: Array.isArray(categories)
         }
     });
 }
@@ -56,7 +56,7 @@ if (!Array.isArray(category_text_list_id)) {
         const search = String(cat_id_user_input).trim().toLowerCase();
 
         /* Exact ID match */
-        const idMatch = category_text_list_id.find(
+        const idMatch = categories.find(
             c => String(c.id).toLowerCase() === search
         );
 
@@ -71,7 +71,7 @@ if (!Array.isArray(category_text_list_id)) {
         }
 
         /* Exact name match */
-        const exactMatch = category_text_list_id.find(c =>
+        const exactMatch = categories.find(c =>
             (c.display_name || c.name || "")
                 .toLowerCase()
                 .trim() === search
@@ -88,7 +88,7 @@ if (!Array.isArray(category_text_list_id)) {
         }
 
         /* Fuzzy matching */
-        const fuse = new Fuse(category_text_list_id, {
+        const fuse = new Fuse(categories, {
             keys: ["display_name", "name"],
             threshold: 0.35,
             includeScore: true,
