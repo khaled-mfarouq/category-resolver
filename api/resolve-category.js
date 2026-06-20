@@ -9,12 +9,28 @@ export default async function handler(req, res) {
     }
 
     try {
-        const { categories, input } = req.body;
+        // Handle bodies sent as strings
+        const rawBody =
+            typeof req.body === "string"
+                ? JSON.parse(req.body)
+                : req.body;
 
+        // Zendesk Ultimate sometimes wraps everything in requestParameters
+        const body = rawBody.requestParameters || rawBody;
+
+        const { categories, input } = body;
+
+        // Debug information (remove later if you want)
         if (!Array.isArray(categories)) {
             return res.status(400).json({
                 success: false,
-                message: "categories must be an array"
+                message: "categories must be an array",
+                debug: {
+                    body: rawBody,
+                    bodyType: typeof rawBody,
+                    categoriesType: typeof categories,
+                    isArray: Array.isArray(categories)
+                }
             });
         }
 
@@ -29,7 +45,7 @@ export default async function handler(req, res) {
 
         /* Exact ID match */
         const idMatch = categories.find(
-            c => String(c.id) === search
+            c => String(c.id).toLowerCase() === search
         );
 
         if (idMatch) {
@@ -75,10 +91,9 @@ export default async function handler(req, res) {
             return res.status(200).json({
                 success: true,
                 match_type: "fuzzy",
-                confidence: Number((1 - best.score).toFixed(2)),
+                confidence: Number((1 - (best.score || 0)).toFixed(2)),
                 category_id: best.item.id,
-                category_name:
-                    best.item.display_name || best.item.name
+                category_name: best.item.display_name || best.item.name
             });
         }
 
@@ -90,7 +105,8 @@ export default async function handler(req, res) {
     } catch (err) {
         return res.status(500).json({
             success: false,
-            message: err.message
+            message: err.message,
+            stack: err.stack
         });
     }
 }
