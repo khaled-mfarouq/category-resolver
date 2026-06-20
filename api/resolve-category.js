@@ -18,7 +18,7 @@ export default async function handler(req, res) {
         // Zendesk Ultimate sometimes wraps everything in requestParameters
         const body = rawBody.requestParameters || rawBody;
 
-let { categories, input } = body;
+let { categories, cat_id_user_input } = body;
 
 /* Zendesk sends arrays as JSON strings */
 if (typeof categories === "string") {
@@ -46,14 +46,14 @@ if (!Array.isArray(categories)) {
     });
 }
 
-        if (!input) {
+        if (!cat_id_user_input) {
             return res.status(400).json({
                 success: false,
-                message: "input is required"
+                message: "cat_id_user_input is required"
             });
         }
 
-        const search = String(input).trim().toLowerCase();
+        const search = String(cat_id_user_input).trim().toLowerCase();
 
         /* Exact ID match */
         const idMatch = categories.find(
