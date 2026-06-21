@@ -65,8 +65,8 @@ if (!Array.isArray(items_param)) {
                 success: true,
                 match_type: "id",
                 confidence: 1,
-                category_id: idMatch.id,
-                category_name: idMatch.display_name || idMatch.name
+                item_id: idMatch.id,
+                item_name: idMatch.display_name || idMatch.name
             });
         }
 
@@ -82,8 +82,8 @@ if (!Array.isArray(items_param)) {
                 success: true,
                 match_type: "exact",
                 confidence: 1,
-                category_id: exactMatch.id,
-                category_name: exactMatch.display_name || exactMatch.name
+                item_id: exactMatch.id,
+                item_name: exactMatch.display_name || exactMatch.name
             });
         }
 
@@ -104,14 +104,14 @@ if (!Array.isArray(items_param)) {
                 success: true,
                 match_type: "fuzzy",
                 confidence: Number((1 - (best.score || 0)).toFixed(2)),
-                category_id: best.item.id,
-                category_name: best.item.display_name || best.item.name
+                item_id: best.item.id,
+                item_name: best.item.display_name || best.item.name
             });
         }
 
         return res.status(404).json({
             success: false,
-            message: "Category not found"
+            message: "Item not found"
         });
 
     } catch (err) {
