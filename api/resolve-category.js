@@ -18,33 +18,33 @@ export default async function handler(req, res) {
         // Zendesk Ultimate sometimes wraps everything in requestParameters
         const body = rawBody.requestParameters || rawBody;
 
-let { categories, cat_id_user_input } = body;
+        let { categories, cat_id_user_input } = body;
 
-/* Zendesk sends arrays as JSON strings */
-if (typeof categories === "string") {
-    try {
-        categories = JSON.parse(categories);
-    } catch (e) {
-        return res.status(400).json({
-            success: false,
-            message: "Unable to parse categories JSON",
-            received: categories,
-            error: e.message
-        });
-    }
-}
-
-if (!Array.isArray(categories)) {
-    return res.status(400).json({
-        success: false,
-        message: "categories must be an array",
-        debug: {
-            categories,
-            categoriesType: typeof categories,
-            isArray: Array.isArray(categories)
+        /* Zendesk sends arrays as JSON strings */
+        if (typeof categories === "string") {
+            try {
+                categories = JSON.parse(categories);
+            } catch (e) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Unable to parse categories JSON",
+                    received: categories,
+                    error: e.message
+                });
+            }
         }
-    });
-}
+
+        if (!Array.isArray(categories)) {
+            return res.status(400).json({
+                success: false,
+                message: "categories must be an array",
+                debug: {
+                    categories,
+                    categoriesType: typeof categories,
+                    isArray: Array.isArray(categories)
+                }
+            });
+        }
 
         if (!cat_id_user_input) {
             return res.status(400).json({
@@ -67,6 +67,26 @@ if (!Array.isArray(categories)) {
                 confidence: 1,
                 category_id: idMatch.id,
                 category_name: idMatch.display_name || idMatch.name
+            });
+        }
+
+        /* Index match (1-based) */
+        const index = Number(search);
+
+        if (
+            Number.isInteger(index) &&
+            index >= 1 &&
+            index <= categories.length
+        ) {
+            const indexMatch = categories[index - 1];
+
+            return res.status(200).json({
+                success: true,
+                match_type: "index",
+                confidence: 1,
+                category_index: index,
+                category_id: indexMatch.id,
+                category_name: indexMatch.display_name || indexMatch.name
             });
         }
 

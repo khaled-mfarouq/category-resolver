@@ -18,33 +18,33 @@ export default async function handler(req, res) {
         // Zendesk Ultimate sometimes wraps everything in requestParameters
         const body = rawBody.requestParameters || rawBody;
 
-let { items_param, item_id_user_input } = body;
+        let { items_param, item_id_user_input } = body;
 
-/* Zendesk sends arrays as JSON strings */
-if (typeof items_param === "string") {
-    try {
-        items_param = JSON.parse(items_param);
-    } catch (e) {
-        return res.status(400).json({
-            success: false,
-            message: "Unable to parse items_param JSON",
-            received: items_param,
-            error: e.message
-        });
-    }
-}
-
-if (!Array.isArray(items_param)) {
-    return res.status(400).json({
-        success: false,
-        message: "items_param must be an array",
-        debug: {
-            items_param,
-            categoriesType: typeof items_param,
-            isArray: Array.isArray(items_param)
+        /* Zendesk sends arrays as JSON strings */
+        if (typeof items_param === "string") {
+            try {
+                items_param = JSON.parse(items_param);
+            } catch (e) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Unable to parse items_param JSON",
+                    received: items_param,
+                    error: e.message
+                });
+            }
         }
-    });
-}
+
+        if (!Array.isArray(items_param)) {
+            return res.status(400).json({
+                success: false,
+                message: "items_param must be an array",
+                debug: {
+                    items_param,
+                    itemsType: typeof items_param,
+                    isArray: Array.isArray(items_param)
+                }
+            });
+        }
 
         if (!item_id_user_input) {
             return res.status(400).json({
@@ -57,7 +57,7 @@ if (!Array.isArray(items_param)) {
 
         /* Exact ID match */
         const idMatch = items_param.find(
-            c => String(c.id).toLowerCase() === search
+            item => String(item.id).toLowerCase() === search
         );
 
         if (idMatch) {
@@ -70,11 +70,32 @@ if (!Array.isArray(items_param)) {
             });
         }
 
+        /* Index match (1-based) */
+        const index = Number(search);
+
+        if (
+            Number.isInteger(index) &&
+            index >= 1 &&
+            index <= items_param.length
+        ) {
+            const indexMatch = items_param[index - 1];
+
+            return res.status(200).json({
+                success: true,
+                match_type: "index",
+                confidence: 1,
+                item_index: index,
+                item_id: indexMatch.id,
+                item_name: indexMatch.display_name || indexMatch.name
+            });
+        }
+
         /* Exact name match */
-        const exactMatch = items_param.find(c =>
-            (c.display_name || c.name || "")
-                .toLowerCase()
-                .trim() === search
+        const exactMatch = items_param.find(
+            item =>
+                (item.display_name || item.name || "")
+                    .toLowerCase()
+                    .trim() === search
         );
 
         if (exactMatch) {
