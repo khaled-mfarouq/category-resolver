@@ -55,7 +55,40 @@ export default async function handler(req, res) {
 
         const search = String(item_id_user_input).trim().toLowerCase();
 
-        /* Exact ID match */
+        /* ==========================
+           Exit commands
+        ========================== */
+
+        const exitCommands = [
+            "exit",
+            "cancel",
+            "quit",
+            "stop",
+            "back",
+            "menu",
+            "end",
+            "done",
+            "bye",
+            "goodbye",
+            "never mind",
+            "nevermind",
+            "forget it",
+            "no thanks",
+            "no thank you"
+        ];
+
+        if (exitCommands.includes(search)) {
+            return res.status(200).json({
+                success: true,
+                status: "exit",
+                message: "User requested to exit."
+            });
+        }
+
+        /* ==========================
+           Exact ID match
+        ========================== */
+
         const idMatch = items_param.find(
             item => String(item.id).toLowerCase() === search
         );
@@ -63,6 +96,7 @@ export default async function handler(req, res) {
         if (idMatch) {
             return res.status(200).json({
                 success: true,
+                status: "matched",
                 match_type: "id",
                 confidence: 1,
                 item_id: idMatch.id,
@@ -70,7 +104,10 @@ export default async function handler(req, res) {
             });
         }
 
-        /* Index match (1-based) */
+        /* ==========================
+           Index match (1-based)
+        ========================== */
+
         const index = Number(search);
 
         if (
@@ -82,6 +119,7 @@ export default async function handler(req, res) {
 
             return res.status(200).json({
                 success: true,
+                status: "matched",
                 match_type: "index",
                 confidence: 1,
                 item_index: index,
@@ -90,7 +128,10 @@ export default async function handler(req, res) {
             });
         }
 
-        /* Exact name match */
+        /* ==========================
+           Exact name match
+        ========================== */
+
         const exactMatch = items_param.find(
             item =>
                 (item.display_name || item.name || "")
@@ -101,6 +142,7 @@ export default async function handler(req, res) {
         if (exactMatch) {
             return res.status(200).json({
                 success: true,
+                status: "matched",
                 match_type: "exact",
                 confidence: 1,
                 item_id: exactMatch.id,
@@ -108,7 +150,10 @@ export default async function handler(req, res) {
             });
         }
 
-        /* Fuzzy matching */
+        /* ==========================
+           Fuzzy matching
+        ========================== */
+
         const fuse = new Fuse(items_param, {
             keys: ["display_name", "name"],
             threshold: 0.35,
@@ -123,6 +168,7 @@ export default async function handler(req, res) {
 
             return res.status(200).json({
                 success: true,
+                status: "matched",
                 match_type: "fuzzy",
                 confidence: Number((1 - (best.score || 0)).toFixed(2)),
                 item_id: best.item.id,
@@ -130,8 +176,13 @@ export default async function handler(req, res) {
             });
         }
 
-        return res.status(404).json({
-            success: false,
+        /* ==========================
+           No match
+        ========================== */
+
+        return res.status(200).json({
+            success: true,
+            status: "not_found",
             message: "Item not found"
         });
 
