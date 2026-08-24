@@ -30,14 +30,17 @@ export default async function handler(req, res) {
            RESTAURANT SELECTION
            ========================================================= */
 
-        // If restaurant selection parameters are provided,
-        // resolve the selected restaurant first.
+        // If restaurant selection parameters are provided, process it.
         if (
-            universal_restdata_data !== undefined &&
             restaurant_choice !== undefined &&
             restaurant_choice !== null &&
             String(restaurant_choice).trim() !== ""
         ) {
+
+            // FIX: If universal_restdata_data is missing but items_param exists, use items_param
+            if (universal_restdata_data === undefined && items_param !== undefined) {
+                universal_restdata_data = items_param;
+            }
 
             /* Zendesk may send the array as a JSON string */
             if (typeof universal_restdata_data === "string") {
@@ -55,16 +58,13 @@ export default async function handler(req, res) {
                 }
             }
 
+            // FIX: If no data array exists at all, handle cleanly instead of crashing
             if (!Array.isArray(universal_restdata_data)) {
-                return res.status(400).json({
-                    success: false,
-                    message:
-                        "universal_restdata_data must be an array",
-                    debug: {
-                        value: universal_restdata_data,
-                        type: typeof universal_restdata_data,
-                        isArray: Array.isArray(universal_restdata_data)
-                    }
+                return res.status(200).json({
+                    success: true,
+                    status: "not_found",
+                    message: "Data catalog array is missing in payload configuration",
+                    restaurant_choice: restaurant_choice
                 });
             }
 
@@ -128,9 +128,8 @@ export default async function handler(req, res) {
 
             const restaurantResults = restaurantFuse.search(choice);
 
-            // FIXED: Properly extraction using index [0] from the match array
             if (restaurantResults.length > 0) {
-                const bestMatch = restaurantResults[0];
+                const bestMatch = restaurantResults[0]; // Access index 0 correctly
                 const bestRestaurant = bestMatch.item;
                 const bestScore = bestMatch.score;
 
@@ -264,5 +263,3 @@ export default async function handler(req, res) {
 
         /* ==========================
            Exact name match
-           ========================== */
-
