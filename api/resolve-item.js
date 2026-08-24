@@ -1,6 +1,9 @@
 import Fuse from "fuse.js";
 
 export default async function handler(req, res) {
+    // Explicitly enforce application/json formatting for Zendesk compatibility
+    res.setHeader('Content-Type', 'application/json');
+
     if (req.method !== "POST") {
         return res.status(405).json({
             success: false,
@@ -9,13 +12,13 @@ export default async function handler(req, res) {
     }
 
     try {
-        // Handle bodies sent as strings
+        // Handle bodies sent as strings safely
         const rawBody =
             typeof req.body === "string"
                 ? JSON.parse(req.body)
                 : req.body;
 
-        // Zendesk Ultimate sometimes wraps everything in requestParameters
+        // Zendesk Ultimate wraps everything inside requestParameters wrapper
         const body = rawBody.requestParameters || rawBody;
 
         let {
@@ -27,43 +30,39 @@ export default async function handler(req, res) {
 
 
         /* =========================================================
-           RESTAURANT SELECTION
+           RESTAURANT SELECTION LOGIC
            ========================================================= */
 
-        // If restaurant selection parameters are provided, process it.
         if (
             restaurant_choice !== undefined &&
             restaurant_choice !== null &&
             String(restaurant_choice).trim() !== ""
         ) {
 
-            // FIX: If universal_restdata_data is missing but items_param exists, use items_param
+            // FALLBACK: If universal_restdata_data is absent but items_param is provided
             if (universal_restdata_data === undefined && items_param !== undefined) {
                 universal_restdata_data = items_param;
             }
 
-            /* Zendesk may send the array as a JSON string */
+            /* Zendesk sends arrays serialized as JSON strings */
             if (typeof universal_restdata_data === "string") {
                 try {
-                    universal_restdata_data =
-                        JSON.parse(universal_restdata_data);
+                    universal_restdata_data = JSON.parse(universal_restdata_data);
                 } catch (e) {
                     return res.status(400).json({
                         success: false,
-                        message:
-                            "Unable to parse universal_restdata_data JSON",
+                        message: "Unable to parse universal_restdata_data JSON string",
                         received: universal_restdata_data,
                         error: e.message
                     });
                 }
             }
 
-            // FIX: If no data array exists at all, handle cleanly instead of crashing
             if (!Array.isArray(universal_restdata_data)) {
                 return res.status(200).json({
                     success: true,
                     status: "not_found",
-                    message: "Data catalog array is missing in payload configuration",
+                    message: "Data catalog array is missing or invalid in payload mapping",
                     restaurant_choice: restaurant_choice
                 });
             }
@@ -71,12 +70,10 @@ export default async function handler(req, res) {
             const choice = String(restaurant_choice).trim();
 
             /* =====================================================
-               Restaurant selection by 1-based index
+               Restaurant index processing (e.g. choice = "7")
                ===================================================== */
-
             const restaurantIndex = Number(choice);
 
-            // ONLY process as an index if the user actually typed a valid integer number
             if (Number.isInteger(restaurantIndex)) {
                 if (restaurantIndex >= 1 && restaurantIndex <= universal_restdata_data.length) {
                     const selectedRestaurant = universal_restdata_data[restaurantIndex - 1];
@@ -106,18 +103,17 @@ export default async function handler(req, res) {
                         item_id: selectedRestaurant.id
                     });
                 } else {
-                    // Input was an integer, but out of array boundaries
                     return res.status(200).json({
                         success: true,
                         status: "not_found",
-                        message: "Invalid restaurant index selection",
+                        message: "Invalid restaurant index selection boundary",
                         restaurant_choice: restaurant_choice
                     });
                 }
             }
 
             /* =====================================================
-               Fuzzy matching for Restaurant Name (If input is text)
+               Fuzzy text fallback search (e.g. choice = "Chicken")
                ===================================================== */
             const restaurantFuse = new Fuse(universal_restdata_data, {
                 keys: ["restaurant_name", "dish_name"],
@@ -128,8 +124,9 @@ export default async function handler(req, res) {
 
             const restaurantResults = restaurantFuse.search(choice);
 
+            // FIXED: Added [0] index accessor to prevent array runtime crashes
             if (restaurantResults.length > 0) {
-                const bestMatch = restaurantResults[0]; // Access index 0 correctly
+                const bestMatch = restaurantResults[0]; 
                 const bestRestaurant = bestMatch.item;
                 const bestScore = bestMatch.score;
 
@@ -148,7 +145,6 @@ export default async function handler(req, res) {
                 });
             }
 
-            // Fallback if text search yielded completely zero matches
             return res.status(200).json({
                 success: true,
                 status: "not_found",
@@ -159,17 +155,16 @@ export default async function handler(req, res) {
 
 
         /* =========================================================
-           EXISTING ITEM RESOLVER (Fallback Section)
+           EXISTING ITEM RESOLVER (Fallback Block)
            ========================================================= */
 
-        /* Zendesk sends arrays as JSON strings */
         if (typeof items_param === "string") {
             try {
                 items_param = JSON.parse(items_param);
             } catch (e) {
                 return res.status(400).json({
                     success: false,
-                    message: "Unable to parse items_param JSON",
+                    message: "Unable to parse items_param JSON string",
                     received: items_param,
                     error: e.message
                 });
@@ -179,29 +174,19 @@ export default async function handler(req, res) {
         if (!Array.isArray(items_param)) {
             return res.status(400).json({
                 success: false,
-                message: "items_param must be an array",
-                debug: {
-                    items_param,
-                    itemsType: typeof items_param,
-                    isArray: Array.isArray(items_param)
-                }
+                message: "items_param must be a valid array wrapper",
+                debug: { items_param, itemsType: typeof items_param }
             });
         }
 
         if (!item_id_user_input) {
             return res.status(400).json({
                 success: false,
-                message: "item_id_user_input is required"
+                message: "item_id_user_input property parameter is required"
             });
         }
 
-        const search =
-            String(item_id_user_input).trim().toLowerCase();
-
-
-        /* ==========================
-           Exit commands
-           ========================== */
+        const search = String(item_id_user_input).trim().toLowerCase();
 
         const exitCommands = [
             "exit", "cancel", "quit", "stop", "back", "menu", "end", "done", "bye", "goodbye", "never mind", "nevermind", "forget it", "no thanks", "no thank you"
@@ -211,14 +196,9 @@ export default async function handler(req, res) {
             return res.status(200).json({
                 success: true,
                 status: "exit",
-                message: "User requested to exit."
+                message: "User requested session exit sequence."
             });
         }
-
-
-        /* ==========================
-           Exact ID match
-           ========================== */
 
         const idMatch = items_param.find(
             item => String(item.id).toLowerCase() === search
@@ -235,18 +215,9 @@ export default async function handler(req, res) {
             });
         }
 
-
-        /* ==========================
-           Index match (1-based)
-           ========================== */
-
         const index = Number(search);
 
-        if (
-            Number.isInteger(index) &&
-            index >= 1 &&
-            index <= items_param.length
-        ) {
+        if (Number.isInteger(index) && index >= 1 && index <= items_param.length) {
             const indexMatch = items_param[index - 1];
 
             return res.status(200).json({
@@ -260,6 +231,28 @@ export default async function handler(req, res) {
             });
         }
 
+        const exactMatch = items_param.find(
+            item => (item.display_name || item.name || "").toLowerCase().trim() === search
+        );
 
-        /* ==========================
-           Exact name match
+        if (exactMatch) {
+            return res.status(200).json({
+                success: true,
+                status: "matched",
+                match_type: "exact",
+                confidence: 1,
+                item_id: exactMatch.id,
+                item_name: exactMatch.display_name || exactMatch.name
+            });
+        }
+
+        const fuse = new Fuse(items_param, {
+            keys: ["display_name", "name"],
+            threshold: 0.35,
+            includeScore: true,
+            ignoreLocation: true
+        });
+
+        const results = fuse.search(search);
+
+        // FIXED: Added [0] index accessor to prevent array runtime crashes
