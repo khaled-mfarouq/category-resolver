@@ -128,7 +128,7 @@ export default async function handler(req, res) {
 
             const restaurantResults = restaurantFuse.search(choice);
 
-            // FIXED: Verify the search array has elements, then access index [0]
+            // FIXED: Properly extraction using index [0] from the match array
             if (restaurantResults.length > 0) {
                 const bestMatch = restaurantResults[0];
                 const bestRestaurant = bestMatch.item;
@@ -160,7 +160,7 @@ export default async function handler(req, res) {
 
 
         /* =========================================================
-           EXISTING ITEM RESOLVER
+           EXISTING ITEM RESOLVER (Fallback Section)
            ========================================================= */
 
         /* Zendesk sends arrays as JSON strings */
@@ -205,21 +205,7 @@ export default async function handler(req, res) {
            ========================== */
 
         const exitCommands = [
-            "exit",
-            "cancel",
-            "quit",
-            "stop",
-            "back",
-            "menu",
-            "end",
-            "done",
-            "bye",
-            "goodbye",
-            "never mind",
-            "nevermind",
-            "forget it",
-            "no thanks",
-            "no thank you"
+            "exit", "cancel", "quit", "stop", "back", "menu", "end", "done", "bye", "goodbye", "never mind", "nevermind", "forget it", "no thanks", "no thank you"
         ];
 
         if (exitCommands.includes(search)) {
@@ -236,8 +222,7 @@ export default async function handler(req, res) {
            ========================== */
 
         const idMatch = items_param.find(
-            item =>
-                String(item.id).toLowerCase() === search
+            item => String(item.id).toLowerCase() === search
         );
 
         if (idMatch) {
@@ -247,8 +232,7 @@ export default async function handler(req, res) {
                 match_type: "id",
                 confidence: 1,
                 item_id: idMatch.id,
-                item_name:
-                    idMatch.display_name || idMatch.name
+                item_name: idMatch.display_name || idMatch.name
             });
         }
 
@@ -273,4 +257,12 @@ export default async function handler(req, res) {
                 confidence: 1,
                 item_index: index,
                 item_id: indexMatch.id,
-                item_name:
+                item_name: indexMatch.display_name || indexMatch.name
+            });
+        }
+
+
+        /* ==========================
+           Exact name match
+           ========================== */
+
