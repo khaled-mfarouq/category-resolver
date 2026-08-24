@@ -76,73 +76,83 @@ export default async function handler(req, res) {
 
             const restaurantIndex = Number(choice);
 
-            if (
-                !Number.isInteger(restaurantIndex) ||
-                restaurantIndex < 1 ||
-                restaurantIndex > universal_restdata_data.length
-            ) {
+            // ONLY process as an index if the user actually typed a valid integer number
+            if (Number.isInteger(restaurantIndex)) {
+                if (restaurantIndex >= 1 && restaurantIndex <= universal_restdata_data.length) {
+                    const selectedRestaurant = universal_restdata_data[restaurantIndex - 1];
+
+                    return res.status(200).json({
+                        success: true,
+                        status: "matched",
+                        match_type: "restaurant_index",
+                        confidence: 1,
+                        restaurant_choice: restaurantIndex,
+                        restaurant: {
+                            id: selectedRestaurant.id,
+                            restaurant_name: selectedRestaurant.restaurant_name,
+                            restaurant_uuid: selectedRestaurant.restaurant_uuid,
+                            restaurant_id: selectedRestaurant.restaurant_id,
+                            is_closed: selectedRestaurant.is_closed,
+                            price: selectedRestaurant.price,
+                            discounted_price: selectedRestaurant.discounted_price,
+                            category_id: selectedRestaurant.category_id,
+                            dish_name: selectedRestaurant.dish_name
+                        },
+                        restaurant_id: selectedRestaurant.restaurant_id,
+                        restaurant_uuid: selectedRestaurant.restaurant_uuid,
+                        category_id: selectedRestaurant.category_id,
+                        restaurant_name: selectedRestaurant.restaurant_name,
+                        dish_name: selectedRestaurant.dish_name,
+                        item_id: selectedRestaurant.id
+                    });
+                } else {
+                    // Input was an integer, but out of array boundaries
+                    return res.status(200).json({
+                        success: true,
+                        status: "not_found",
+                        message: "Invalid restaurant index selection",
+                        restaurant_choice: restaurant_choice
+                    });
+                }
+            }
+
+            /* =====================================================
+               Fuzzy matching for Restaurant Name (If input is text)
+               ===================================================== */
+            const restaurantFuse = new Fuse(universal_restdata_data, {
+                keys: ["restaurant_name", "dish_name"],
+                threshold: 0.35,
+                includeScore: true,
+                ignoreLocation: true
+            });
+
+            const restaurantResults = restaurantFuse.search(choice);
+
+            if (restaurantResults.length > 0) {
+                const bestRestaurant = restaurantResults[0].item;
+                const bestScore = restaurantResults[0].score;
+
                 return res.status(200).json({
                     success: true,
-                    status: "not_found",
-                    message: "Invalid restaurant selection",
-                    restaurant_choice: restaurant_choice
+                    status: "matched",
+                    match_type: "restaurant_fuzzy",
+                    confidence: Number((1 - (bestScore || 0)).toFixed(2)),
+                    restaurant_id: bestRestaurant.restaurant_id,
+                    restaurant_name: bestRestaurant.restaurant_name,
+                    restaurant_uuid: bestRestaurant.restaurant_uuid,
+                    category_id: bestRestaurant.category_id,
+                    dish_name: bestRestaurant.dish_name,
+                    item_id: bestRestaurant.id,
+                    restaurant: bestRestaurant
                 });
             }
 
-            const selectedRestaurant =
-                universal_restdata_data[restaurantIndex - 1];
-
-            /* =====================================================
-               Return selected restaurant
-               ===================================================== */
-
+            // Fallback if text search yielded completely zero matches
             return res.status(200).json({
                 success: true,
-                status: "matched",
-                match_type: "restaurant_index",
-                confidence: 1,
-
-                restaurant_choice: restaurantIndex,
-
-                restaurant: {
-                    id: selectedRestaurant.id,
-                    restaurant_name:
-                        selectedRestaurant.restaurant_name,
-                    restaurant_uuid:
-                        selectedRestaurant.restaurant_uuid,
-                    restaurant_id:
-                        selectedRestaurant.restaurant_id,
-                    is_closed:
-                        selectedRestaurant.is_closed,
-                    price:
-                        selectedRestaurant.price,
-                    discounted_price:
-                        selectedRestaurant.discounted_price,
-                    category_id:
-                        selectedRestaurant.category_id,
-                    dish_name:
-                        selectedRestaurant.dish_name
-                },
-
-                // Also return the important values at the top level
-                // so Zendesk can easily store them as session parameters.
-                restaurant_id:
-                    selectedRestaurant.restaurant_id,
-
-                restaurant_uuid:
-                    selectedRestaurant.restaurant_uuid,
-
-                category_id:
-                    selectedRestaurant.category_id,
-
-                restaurant_name:
-                    selectedRestaurant.restaurant_name,
-
-                dish_name:
-                    selectedRestaurant.dish_name,
-
-                item_id:
-                    selectedRestaurant.id
+                status: "not_found",
+                message: "No matching restaurant index or text name found",
+                restaurant_choice: restaurant_choice
             });
         }
 
@@ -268,76 +278,3 @@ export default async function handler(req, res) {
 
 
         /* ==========================
-           Exact name match
-           ========================== */
-
-        const exactMatch = items_param.find(
-            item =>
-                (item.display_name || item.name || "")
-                    .toLowerCase()
-                    .trim() === search
-        );
-
-        if (exactMatch) {
-            return res.status(200).json({
-                success: true,
-                status: "matched",
-                match_type: "exact",
-                confidence: 1,
-                item_id: exactMatch.id,
-                item_name:
-                    exactMatch.display_name || exactMatch.name
-            });
-        }
-
-
-        /* ==========================
-           Fuzzy matching
-           ========================== */
-
-        const fuse = new Fuse(items_param, {
-            keys: ["display_name", "name"],
-            threshold: 0.35,
-            includeScore: true,
-            ignoreLocation: true
-        });
-
-        const results = fuse.search(search);
-
-        if (results.length > 0) {
-            const best = results[0];
-
-            return res.status(200).json({
-                success: true,
-                status: "matched",
-                match_type: "fuzzy",
-                confidence:
-                    Number(
-                        (1 - (best.score || 0)).toFixed(2)
-                    ),
-                item_id: best.item.id,
-                item_name:
-                    best.item.display_name ||
-                    best.item.name
-            });
-        }
-
-
-        /* ==========================
-           No match
-           ========================== */
-
-        return res.status(200).json({
-            success: true,
-            status: "not_found",
-            message: "Item not found"
-        });
-
-    } catch (err) {
-        return res.status(500).json({
-            success: false,
-            message: err.message,
-            stack: err.stack
-        });
-    }
-}
