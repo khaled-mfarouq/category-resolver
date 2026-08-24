@@ -128,9 +128,11 @@ export default async function handler(req, res) {
 
             const restaurantResults = restaurantFuse.search(choice);
 
+            // FIXED: Verify the search array has elements, then access index [0]
             if (restaurantResults.length > 0) {
-                const bestRestaurant = restaurantResults[0].item;
-                const bestScore = restaurantResults[0].score;
+                const bestMatch = restaurantResults[0];
+                const bestRestaurant = bestMatch.item;
+                const bestScore = bestMatch.score;
 
                 return res.status(200).json({
                     success: true,
@@ -272,9 +274,3 @@ export default async function handler(req, res) {
                 item_index: index,
                 item_id: indexMatch.id,
                 item_name:
-                    indexMatch.display_name || indexMatch.name
-            });
-        }
-
-
-        /* ==========================
