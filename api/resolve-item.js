@@ -1,8 +1,6 @@
 import Fuse from "fuse.js";
 
 export default async function handler(req, res) {
-    res.setHeader('Content-Type', 'application/json');
-
     if (req.method !== "POST") {
         return res.status(405).json({
             success: false,
@@ -11,7 +9,13 @@ export default async function handler(req, res) {
     }
 
     try {
-        const rawBody = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
+        // Handle bodies sent as strings
+        const rawBody =
+            typeof req.body === "string"
+                ? JSON.parse(req.body)
+                : req.body;
+
+        // Zendesk Ultimate sometimes wraps everything in requestParameters
         const body = rawBody.requestParameters || rawBody;
 
         let {
@@ -21,126 +25,319 @@ export default async function handler(req, res) {
             restaurant_choice
         } = body;
 
-        // Clean user input text
-        const searchInput = String(item_id_user_input || restaurant_choice || "").trim();
-        const searchLower = searchInput.toLowerCase();
 
         /* =========================================================
-           1. GLOBAL EXIT COMMAND CHECK (FIRST PRIORITY)
+           RESTAURANT SELECTION
            ========================================================= */
-        const exitCommands = [
-            "exit", "cancel", "quit", "stop", "back", "menu", "end", "done", 
-            "bye", "goodbye", "never mind", "nevermind", "forget it", "no thanks", "no thank you"
-        ];
 
-        if (exitCommands.includes(searchLower)) {
-            const exitPayload = {
-                success: true,
-                status: "exit",
-                match_type: "exit",
-                confidence: 1,
-                message: "User requested exit sequence."
-            };
-            return res.status(200).json({ ...exitPayload, data: exitPayload });
-        }
+        // If restaurant selection parameters are provided,
+        // resolve the selected restaurant first.
+        if (
+            universal_restdata_data !== undefined &&
+            restaurant_choice !== undefined &&
+            restaurant_choice !== null &&
+            String(restaurant_choice).trim() !== ""
+        ) {
 
-        /* =========================================================
-           2. NUMERIC INDEX LOOKUP SELECTION (e.g. "7")
-           ========================================================= */
-        const numericIndex = Number(searchInput);
-
-        if (!isNaN(numericIndex) && Number.isInteger(numericIndex)) {
-            // Pick the correct active array data layer dynamically
-            const activeCatalog = universal_restdata_data !== undefined ? universal_restdata_data : items_param;
-            let catalogArray = [];
-
-            if (typeof activeCatalog === "string") {
-                try { catalogArray = JSON.parse(activeCatalog); } catch(e) {}
-            } else if (Array.isArray(activeCatalog)) {
-                catalogArray = activeCatalog;
-            }
-
-            if (catalogArray.length > 0 && numericIndex >= 1 && numericIndex <= catalogArray.length) {
-                const itemMatch = catalogArray[numericIndex - 1];
-                const indexPayload = {
-                    success: true,
-                    status: "matched",
-                    match_type: "index",
-                    confidence: 1,
-                    restaurant_id: itemMatch.restaurant_id || null,
-                    restaurant_name: itemMatch.restaurant_name || null,
-                    dish_name: itemMatch.dish_name || itemMatch.name || null,
-                    item_id: itemMatch.id || itemMatch.restaurant_id || null,
-                    item_name: itemMatch.display_name || itemMatch.name || itemMatch.restaurant_name || null
-                };
-                return res.status(200).json({ ...indexPayload, data: indexPayload });
-            } else {
-                const outOfBoundsPayload = {
-                    success: true,
-                    status: "not_found",
-                    match_type: "none",
-                    confidence: 0,
-                    message: "Selection index out of catalog boundaries."
-                };
-                return res.status(200).json({ ...outOfBoundsPayload, data: outOfBoundsPayload });
-            }
-        }
-
-        /* =========================================================
-           3. FUZZY TEXT CATALOG LOOKUP
-           ========================================================= */
-        const targetCatalog = universal_restdata_data !== undefined ? universal_restdata_data : items_param;
-        let textCatalogArray = [];
-
-        if (typeof targetCatalog === "string") {
-            try { textCatalogArray = JSON.parse(targetCatalog); } catch(e) {}
-        } else if (Array.isArray(targetCatalog)) {
-            textCatalogArray = targetCatalog;
-        }
-
-        if (Array.isArray(textCatalogArray) && textCatalogArray.length > 0) {
-            const fuse = new Fuse(textCatalogArray, {
-                keys: ["restaurant_name", "dish_name", "display_name", "name"],
-                threshold: 0.35,
-                includeScore: true,
-                ignoreLocation: true
-            });
-
-            const results = fuse.search(searchInput);
-
-            if (results.length > 0) {
-                const best = results[0]; // Access index 0 correctly
-                if (best.score <= 0.35) {
-                    const matchedPayload = {
-                        success: true,
-                        status: "matched",
-                        match_type: "fuzzy",
-                        confidence: Number((1 - best.score).toFixed(2)),
-                        restaurant_id: best.item.restaurant_id || null,
-                        restaurant_name: best.item.restaurant_name || null,
-                        dish_name: best.item.dish_name || best.item.name || null,
-                        item_id: best.item.id || null,
-                        item_name: best.item.display_name || best.item.name || best.item.restaurant_name || null
-                    };
-                    return res.status(200).json({ ...matchedPayload, data: matchedPayload });
+            /* Zendesk may send the array as a JSON string */
+            if (typeof universal_restdata_data === "string") {
+                try {
+                    universal_restdata_data =
+                        JSON.parse(universal_restdata_data);
+                } catch (e) {
+                    return res.status(400).json({
+                        success: false,
+                        message:
+                            "Unable to parse universal_restdata_data JSON",
+                        received: universal_restdata_data,
+                        error: e.message
+                    });
                 }
             }
+
+            if (!Array.isArray(universal_restdata_data)) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "universal_restdata_data must be an array",
+                    debug: {
+                        value: universal_restdata_data,
+                        type: typeof universal_restdata_data,
+                        isArray: Array.isArray(universal_restdata_data)
+                    }
+                });
+            }
+
+            const choice = String(restaurant_choice).trim();
+
+            /* =====================================================
+               Restaurant selection by 1-based index
+               ===================================================== */
+
+            const restaurantIndex = Number(choice);
+
+            if (
+                !Number.isInteger(restaurantIndex) ||
+                restaurantIndex < 1 ||
+                restaurantIndex > universal_restdata_data.length
+            ) {
+                return res.status(200).json({
+                    success: true,
+                    status: "not_found",
+                    message: "Invalid restaurant selection",
+                    restaurant_choice: restaurant_choice
+                });
+            }
+
+            const selectedRestaurant =
+                universal_restdata_data[restaurantIndex - 1];
+
+            /* =====================================================
+               Return selected restaurant
+               ===================================================== */
+
+            return res.status(200).json({
+                success: true,
+                status: "matched",
+                match_type: "restaurant_index",
+                confidence: 1,
+
+                restaurant_choice: restaurantIndex,
+
+                restaurant: {
+                    id: selectedRestaurant.id,
+                    restaurant_name:
+                        selectedRestaurant.restaurant_name,
+                    restaurant_uuid:
+                        selectedRestaurant.restaurant_uuid,
+                    restaurant_id:
+                        selectedRestaurant.restaurant_id,
+                    is_closed:
+                        selectedRestaurant.is_closed,
+                    price:
+                        selectedRestaurant.price,
+                    discounted_price:
+                        selectedRestaurant.discounted_price,
+                    category_id:
+                        selectedRestaurant.category_id,
+                    dish_name:
+                        selectedRestaurant.dish_name
+                },
+
+                // Also return the important values at the top level
+                // so Zendesk can easily store them as session parameters.
+                restaurant_id:
+                    selectedRestaurant.restaurant_id,
+
+                restaurant_uuid:
+                    selectedRestaurant.restaurant_uuid,
+
+                category_id:
+                    selectedRestaurant.category_id,
+
+                restaurant_name:
+                    selectedRestaurant.restaurant_name,
+
+                dish_name:
+                    selectedRestaurant.dish_name,
+
+                item_id:
+                    selectedRestaurant.id
+            });
         }
 
+
         /* =========================================================
-           4. GLOBAL NOT FOUND FALLBACK (Gibberish)
+           EXISTING ITEM RESOLVER
            ========================================================= */
-        const fallbackPayload = {
+
+        /* Zendesk sends arrays as JSON strings */
+        if (typeof items_param === "string") {
+            try {
+                items_param = JSON.parse(items_param);
+            } catch (e) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Unable to parse items_param JSON",
+                    received: items_param,
+                    error: e.message
+                });
+            }
+        }
+
+        if (!Array.isArray(items_param)) {
+            return res.status(400).json({
+                success: false,
+                message: "items_param must be an array",
+                debug: {
+                    items_param,
+                    itemsType: typeof items_param,
+                    isArray: Array.isArray(items_param)
+                }
+            });
+        }
+
+        if (!item_id_user_input) {
+            return res.status(400).json({
+                success: false,
+                message: "item_id_user_input is required"
+            });
+        }
+
+        const search =
+            String(item_id_user_input).trim().toLowerCase();
+
+
+        /* ==========================
+           Exit commands
+           ========================== */
+
+        const exitCommands = [
+            "exit",
+            "cancel",
+            "quit",
+            "stop",
+            "back",
+            "menu",
+            "end",
+            "done",
+            "bye",
+            "goodbye",
+            "never mind",
+            "nevermind",
+            "forget it",
+            "no thanks",
+            "no thank you"
+        ];
+
+        if (exitCommands.includes(search)) {
+            return res.status(200).json({
+                success: true,
+                status: "exit",
+                message: "User requested to exit."
+            });
+        }
+
+
+        /* ==========================
+           Exact ID match
+           ========================== */
+
+        const idMatch = items_param.find(
+            item =>
+                String(item.id).toLowerCase() === search
+        );
+
+        if (idMatch) {
+            return res.status(200).json({
+                success: true,
+                status: "matched",
+                match_type: "id",
+                confidence: 1,
+                item_id: idMatch.id,
+                item_name:
+                    idMatch.display_name || idMatch.name
+            });
+        }
+
+
+        /* ==========================
+           Index match (1-based)
+           ========================== */
+
+        const index = Number(search);
+
+        if (
+            Number.isInteger(index) &&
+            index >= 1 &&
+            index <= items_param.length
+        ) {
+            const indexMatch = items_param[index - 1];
+
+            return res.status(200).json({
+                success: true,
+                status: "matched",
+                match_type: "index",
+                confidence: 1,
+                item_index: index,
+                item_id: indexMatch.id,
+                item_name:
+                    indexMatch.display_name || indexMatch.name
+            });
+        }
+
+
+        /* ==========================
+           Exact name match
+           ========================== */
+
+        const exactMatch = items_param.find(
+            item =>
+                (item.display_name || item.name || "")
+                    .toLowerCase()
+                    .trim() === search
+        );
+
+        if (exactMatch) {
+            return res.status(200).json({
+                success: true,
+                status: "matched",
+                match_type: "exact",
+                confidence: 1,
+                item_id: exactMatch.id,
+                item_name:
+                    exactMatch.display_name || exactMatch.name
+            });
+        }
+
+
+        /* ==========================
+           Fuzzy matching
+           ========================== */
+
+        const fuse = new Fuse(items_param, {
+            keys: ["display_name", "name"],
+            threshold: 0.35,
+            includeScore: true,
+            ignoreLocation: true
+        });
+
+        const results = fuse.search(search);
+
+        if (results.length > 0) {
+            const best = results[0];
+
+            return res.status(200).json({
+                success: true,
+                status: "matched",
+                match_type: "fuzzy",
+                confidence:
+                    Number(
+                        (1 - (best.score || 0)).toFixed(2)
+                    ),
+                item_id: best.item.id,
+                item_name:
+                    best.item.display_name ||
+                    best.item.name
+            });
+        }
+
+
+        /* ==========================
+           No match
+           ========================== */
+
+        return res.status(200).json({
             success: true,
             status: "not_found",
-            match_type: "none",
-            confidence: 0,
-            message: "No entries match user search parameter values."
-        };
-        return res.status(200).json({ ...fallbackPayload, data: fallbackPayload });
+            message: "Item not found"
+        });
 
     } catch (err) {
-        const errorPayload = { status: "error", message: err.message };
-        return res.status(200).json({ ...errorPayload, data: errorPayload });
+        return res.status(500).json({
+            success: false,
+            message: err.message,
+            stack: err.stack
+        });
     }
 }
