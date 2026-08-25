@@ -21,11 +21,11 @@ export default async function handler(req, res) {
             restaurant_choice
         } = body;
 
-        // Clean user inputs for verification
+        // Unified clean input tracking
         const rawUserInput = String(item_id_user_input || restaurant_choice || "").trim().toLowerCase();
 
         /* =========================================================
-           1. CRITICAL GLOBAL EXIT COMMANDS CHECK (FIRST PRIORITY)
+           1. GLOBAL EXIT COMMAND CHECK
            ========================================================= */
         const exitCommands = [
             "exit", "cancel", "quit", "stop", "back", "menu", "end", "done", 
@@ -33,14 +33,17 @@ export default async function handler(req, res) {
         ];
 
         if (exitCommands.includes(rawUserInput)) {
+            const exitPayload = {
+                success: true,
+                status: "exit",
+                match_type: "exit",
+                confidence: 1,
+                message: "User requested exit."
+            };
+            // Send both formats for absolute safety with Zendesk custom mappings
             return res.status(200).json({
-                data: {
-                    success: true,
-                    status: "exit",
-                    match_type: "exit",
-                    confidence: 1,
-                    message: "User requested exit."
-                }
+                ...exitPayload,
+                data: exitPayload
             });
         }
 
@@ -57,39 +60,33 @@ export default async function handler(req, res) {
                 try {
                     universal_restdata_data = JSON.parse(universal_restdata_data);
                 } catch (e) {
-                    return res.status(200).json({
-                        data: { status: "error", message: "Failed to parse restaurant data JSON" }
-                    });
+                    return res.status(200).json({ status: "error", data: { status: "error" } });
                 }
             }
 
             if (!Array.isArray(universal_restdata_data)) {
-                return res.status(200).json({
-                    data: { status: "error", message: "universal_restdata_data must be an array" }
-                });
+                return res.status(200).json({ status: "error", data: { status: "error" } });
             }
 
             const choice = String(restaurant_choice).trim();
             const restaurantIndex = Number(choice);
 
-            // Valid Index Check
             if (Number.isInteger(restaurantIndex) && restaurantIndex >= 1 && restaurantIndex <= universal_restdata_data.length) {
                 const selectedRestaurant = universal_restdata_data[restaurantIndex - 1];
-                return res.status(200).json({
-                    data: {
-                        success: true,
-                        status: "matched",
-                        match_type: "restaurant_index",
-                        confidence: 1,
-                        restaurant_id: selectedRestaurant.restaurant_id,
-                        restaurant_name: selectedRestaurant.restaurant_name,
-                        dish_name: selectedRestaurant.dish_name,
-                        item_id: selectedRestaurant.id
-                    }
-                });
+                const matchedPayload = {
+                    success: true,
+                    status: "matched",
+                    match_type: "restaurant_index",
+                    confidence: 1,
+                    restaurant_id: selectedRestaurant.restaurant_id,
+                    restaurant_name: selectedRestaurant.restaurant_name,
+                    dish_name: selectedRestaurant.dish_name,
+                    item_id: selectedRestaurant.id
+                };
+                return res.status(200).json({ ...matchedPayload, data: matchedPayload });
             }
 
-            // Input is text or out-of-bounds number: Fallback to Fuzzy Search across Restaurant Names
+            // Restaurant Name Fuzzy Fallback Check
             const restaurantFuse = new Fuse(universal_restdata_data, {
                 keys: ["restaurant_name", "dish_name"],
                 threshold: 0.35,
@@ -101,30 +98,27 @@ export default async function handler(req, res) {
 
             if (restaurantResults.length > 0 && restaurantResults[0].score <= 0.35) {
                 const bestRestaurant = restaurantResults[0].item;
-                return res.status(200).json({
-                    data: {
-                        success: true,
-                        status: "matched",
-                        match_type: "restaurant_fuzzy",
-                        confidence: Number((1 - restaurantResults[0].score).toFixed(2)),
-                        restaurant_id: bestRestaurant.restaurant_id,
-                        restaurant_name: bestRestaurant.restaurant_name,
-                        dish_name: bestRestaurant.dish_name,
-                        item_id: bestRestaurant.id
-                    }
-                });
+                const matchedPayload = {
+                    success: true,
+                    status: "matched",
+                    match_type: "restaurant_fuzzy",
+                    confidence: Number((1 - restaurantResults[0].score).toFixed(2)),
+                    restaurant_id: bestRestaurant.restaurant_id,
+                    restaurant_name: bestRestaurant.restaurant_name,
+                    dish_name: bestRestaurant.dish_name,
+                    item_id: bestRestaurant.id
+                };
+                return res.status(200).json({ ...matchedPayload, data: matchedPayload });
             }
 
-            // If it is junk like "kkkkkk", return clean not_found response structure
-            return res.status(200).json({
-                data: {
-                    success: true,
-                    status: "not_found",
-                    match_type: "none",
-                    confidence: 0,
-                    message: "No matching restaurant found"
-                }
-            });
+            const customNotFound = {
+                success: true,
+                status: "not_found",
+                match_type: "none",
+                confidence: 0,
+                message: "No matching restaurant found"
+            };
+            return res.status(200).json({ ...customNotFound, data: customNotFound });
         }
 
         /* =========================================================
@@ -132,36 +126,30 @@ export default async function handler(req, res) {
            ========================================================= */
         if (typeof items_param === "string") {
             try { items_param = JSON.parse(items_param); } catch (e) {
-                return res.status(200).json({ data: { status: "error", message: "Failed to parse items JSON" } });
+                return res.status(200).json({ status: "error", data: { status: "error" } });
             }
         }
 
         if (!Array.isArray(items_param) || !item_id_user_input || String(item_id_user_input).trim() === "") {
-            return res.status(200).json({
-                data: { status: "not_found", message: "Missing item data requirements" }
-            });
+            const missingPayload = { status: "not_found", message: "Missing item data requirements" };
+            return res.status(200).json({ ...missingPayload, data: missingPayload });
         }
 
         const search = String(item_id_user_input).trim().toLowerCase();
 
-        // Exact ID Check
         const idMatch = items_param.find(item => String(item.id).toLowerCase() === search);
         if (idMatch) {
-            return res.status(200).json({
-                data: { success: true, status: "matched", match_type: "id", item_id: idMatch.id, item_name: idMatch.display_name || idMatch.name }
-            });
+            const matchedPayload = { success: true, status: "matched", match_type: "id", item_id: idMatch.id, item_name: idMatch.display_name || idMatch.name };
+            return res.status(200).json({ ...matchedPayload, data: matchedPayload });
         }
 
-        // Exact Index Check
         const index = Number(search);
         if (Number.isInteger(index) && index >= 1 && index <= items_param.length) {
             const indexMatch = items_param[index - 1];
-            return res.status(200).json({
-                data: { success: true, status: "matched", match_type: "index", item_id: indexMatch.id, item_name: indexMatch.display_name || indexMatch.name }
-            });
+            const matchedPayload = { success: true, status: "matched", match_type: "index", item_id: indexMatch.id, item_name: indexMatch.display_name || indexMatch.name };
+            return res.status(200).json({ ...matchedPayload, data: matchedPayload });
         }
 
-        // Fuzzy Item Matching Check
         const fuse = new Fuse(items_param, {
             keys: ["display_name", "name"],
             threshold: 0.35,
@@ -172,32 +160,28 @@ export default async function handler(req, res) {
         const results = fuse.search(search);
         if (results.length > 0 && results[0].score <= 0.35) {
             const best = results[0];
-            return res.status(200).json({
-                data: {
-                    success: true,
-                    status: "matched",
-                    match_type: "fuzzy",
-                    confidence: Number((1 - best.score).toFixed(2)),
-                    item_id: best.item.id,
-                    item_name: best.item.display_name || best.item.name
-                }
-            });
+            const matchedPayload = {
+                success: true,
+                status: "matched",
+                match_type: "fuzzy",
+                confidence: Number((1 - best.score).toFixed(2)),
+                item_id: best.item.id,
+                item_name: best.item.display_name || best.item.name
+            };
+            return res.status(200).json({ ...matchedPayload, data: matchedPayload });
         }
 
-        // Base Global Fallback
-        return res.status(200).json({
-            data: {
-                success: true,
-                status: "not_found",
-                match_type: "none",
-                confidence: 0,
-                message: "Item entity not found"
-            }
-        });
+        const fallbackNotFound = {
+            success: true,
+            status: "not_found",
+            match_type: "none",
+            confidence: 0,
+            message: "Item entity not found"
+        };
+        return res.status(200).json({ ...fallbackNotFound, data: fallbackNotFound });
 
     } catch (err) {
-        return res.status(200).json({
-            data: { status: "error", message: err.message }
-        });
+        const errorPayload = { status: "error", message: err.message };
+        return res.status(200).json({ ...errorPayload, data: errorPayload });
     }
 }
