@@ -666,22 +666,17 @@ export default async function handler(req, res) {
 
     } catch (err) {
 
-        console.error(
-            "RESOLVER ERROR:",
-            err
-        );
+    console.error("========== RESOLVER ERROR ==========");
+    console.error("Message:", err?.message);
+    console.error("Stack:", err?.stack);
+    console.error("====================================");
 
-        return res.status(500).json({
-
-            success: false,
-
-            status: "error",
-
-            message:
-                err.message,
-
-            stack:
-                err.stack
-        });
-    }
+    return res.status(200).json({
+        success: false,
+        status: "error",
+        error_message: String(err?.message || err),
+        error_stack: String(err?.stack || ""),
+        message: "Resolver exception"
+    });
+}
 }
