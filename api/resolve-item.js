@@ -1,6 +1,8 @@
 import Fuse from "fuse.js";
 
 export default async function handler(req, res) {
+    res.setHeader('Content-Type', 'application/json');
+
     if (req.method !== "POST") {
         return res.status(405).json({
             success: false,
@@ -9,13 +11,7 @@ export default async function handler(req, res) {
     }
 
     try {
-        // Handle bodies sent as strings
-        const rawBody =
-            typeof req.body === "string"
-                ? JSON.parse(req.body)
-                : req.body;
-
-        // Zendesk Ultimate sometimes wraps everything in requestParameters
+        const rawBody = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
         const body = rawBody.requestParameters || rawBody;
 
         let {
@@ -25,349 +21,183 @@ export default async function handler(req, res) {
             restaurant_choice
         } = body;
 
+        // Clean user inputs for verification
+        const rawUserInput = String(item_id_user_input || restaurant_choice || "").trim().toLowerCase();
 
         /* =========================================================
-           RESTAURANT SELECTION
+           1. CRITICAL GLOBAL EXIT COMMANDS CHECK (FIRST PRIORITY)
            ========================================================= */
+        const exitCommands = [
+            "exit", "cancel", "quit", "stop", "back", "menu", "end", "done", 
+            "bye", "goodbye", "never mind", "nevermind", "forget it", "no thanks", "no thank you"
+        ];
 
-        // If restaurant selection parameters are provided,
-        // resolve the selected restaurant first.
+        if (exitCommands.includes(rawUserInput)) {
+            return res.status(200).json({
+                data: {
+                    success: true,
+                    status: "exit",
+                    match_type: "exit",
+                    confidence: 1,
+                    message: "User requested exit."
+                }
+            });
+        }
+
+        /* =========================================================
+           2. RESTAURANT SELECTION PROCESS
+           ========================================================= */
         if (
             universal_restdata_data !== undefined &&
             restaurant_choice !== undefined &&
             restaurant_choice !== null &&
             String(restaurant_choice).trim() !== ""
         ) {
-
-            // Zendesk may send the array as a JSON string
             if (typeof universal_restdata_data === "string") {
                 try {
-                    universal_restdata_data =
-                        JSON.parse(universal_restdata_data);
+                    universal_restdata_data = JSON.parse(universal_restdata_data);
                 } catch (e) {
-                    return res.status(400).json({
-                        success: false,
-                        message:
-                            "Unable to parse universal_restdata_data JSON",
-                        received: universal_restdata_data,
-                        error: e.message
+                    return res.status(200).json({
+                        data: { status: "error", message: "Failed to parse restaurant data JSON" }
                     });
                 }
             }
 
             if (!Array.isArray(universal_restdata_data)) {
-                return res.status(400).json({
-                    success: false,
-                    message:
-                        "universal_restdata_data must be an array",
-                    debug: {
-                        value: universal_restdata_data,
-                        type: typeof universal_restdata_data,
-                        isArray: Array.isArray(universal_restdata_data)
-                    }
+                return res.status(200).json({
+                    data: { status: "error", message: "universal_restdata_data must be an array" }
                 });
             }
 
             const choice = String(restaurant_choice).trim();
-
-            /* =====================================================
-               Restaurant selection by 1-based index
-               ===================================================== */
-
             const restaurantIndex = Number(choice);
 
-            if (
-                !Number.isInteger(restaurantIndex) ||
-                restaurantIndex < 1 ||
-                restaurantIndex > universal_restdata_data.length
-            ) {
+            // Valid Index Check
+            if (Number.isInteger(restaurantIndex) && restaurantIndex >= 1 && restaurantIndex <= universal_restdata_data.length) {
+                const selectedRestaurant = universal_restdata_data[restaurantIndex - 1];
                 return res.status(200).json({
+                    data: {
+                        success: true,
+                        status: "matched",
+                        match_type: "restaurant_index",
+                        confidence: 1,
+                        restaurant_id: selectedRestaurant.restaurant_id,
+                        restaurant_name: selectedRestaurant.restaurant_name,
+                        dish_name: selectedRestaurant.dish_name,
+                        item_id: selectedRestaurant.id
+                    }
+                });
+            }
+
+            // Input is text or out-of-bounds number: Fallback to Fuzzy Search across Restaurant Names
+            const restaurantFuse = new Fuse(universal_restdata_data, {
+                keys: ["restaurant_name", "dish_name"],
+                threshold: 0.35,
+                includeScore: true,
+                ignoreLocation: true
+            });
+
+            const restaurantResults = restaurantFuse.search(choice);
+
+            if (restaurantResults.length > 0 && restaurantResults[0].score <= 0.35) {
+                const bestRestaurant = restaurantResults[0].item;
+                return res.status(200).json({
+                    data: {
+                        success: true,
+                        status: "matched",
+                        match_type: "restaurant_fuzzy",
+                        confidence: Number((1 - restaurantResults[0].score).toFixed(2)),
+                        restaurant_id: bestRestaurant.restaurant_id,
+                        restaurant_name: bestRestaurant.restaurant_name,
+                        dish_name: bestRestaurant.dish_name,
+                        item_id: bestRestaurant.id
+                    }
+                });
+            }
+
+            // If it is junk like "kkkkkk", return clean not_found response structure
+            return res.status(200).json({
+                data: {
                     success: true,
                     status: "not_found",
-                    message: "Invalid restaurant selection",
-                    restaurant_choice: restaurant_choice
-                });
-            }
-
-            const selectedRestaurant =
-                universal_restdata_data[restaurantIndex - 1];
-
-            /* =====================================================
-               Return selected restaurant
-               ===================================================== */
-
-            return res.status(200).json({
-                success: true,
-                status: "matched",
-                match_type: "restaurant_index",
-                confidence: 1,
-
-                restaurant_choice: restaurantIndex,
-
-                restaurant: {
-                    id: selectedRestaurant.id,
-                    restaurant_name:
-                        selectedRestaurant.restaurant_name,
-                    restaurant_uuid:
-                        selectedRestaurant.restaurant_uuid,
-                    restaurant_id:
-                        selectedRestaurant.restaurant_id,
-                    is_closed:
-                        selectedRestaurant.is_closed,
-                    price:
-                        selectedRestaurant.price,
-                    discounted_price:
-                        selectedRestaurant.discounted_price,
-                    category_id:
-                        selectedRestaurant.category_id,
-                    dish_name:
-                        selectedRestaurant.dish_name
-                },
-
-                // Also return important values at the top level
-                // so Zendesk can easily store them as session parameters.
-                restaurant_id:
-                    selectedRestaurant.restaurant_id,
-
-                restaurant_uuid:
-                    selectedRestaurant.restaurant_uuid,
-
-                category_id:
-                    selectedRestaurant.category_id,
-
-                restaurant_name:
-                    selectedRestaurant.restaurant_name,
-
-                dish_name:
-                    selectedRestaurant.dish_name,
-
-                item_id:
-                    selectedRestaurant.id
-            });
-        }
-
-
-        /* =========================================================
-           ITEM RESOLVER
-           ========================================================= */
-
-        // Zendesk sends arrays as JSON strings
-        if (typeof items_param === "string") {
-            try {
-                items_param = JSON.parse(items_param);
-            } catch (e) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Unable to parse items_param JSON",
-                    received: items_param,
-                    error: e.message
-                });
-            }
-        }
-
-        if (!Array.isArray(items_param)) {
-            return res.status(400).json({
-                success: false,
-                message: "items_param must be an array",
-                debug: {
-                    items_param,
-                    itemsType: typeof items_param,
-                    isArray: Array.isArray(items_param)
+                    match_type: "none",
+                    confidence: 0,
+                    message: "No matching restaurant found"
                 }
             });
         }
 
-        if (
-            item_id_user_input === undefined ||
-            item_id_user_input === null ||
-            String(item_id_user_input).trim() === ""
-        ) {
-            return res.status(400).json({
-                success: false,
-                message: "item_id_user_input is required"
-            });
+        /* =========================================================
+           3. STANDARD ITEM RESOLVER PROCESS
+           ========================================================= */
+        if (typeof items_param === "string") {
+            try { items_param = JSON.parse(items_param); } catch (e) {
+                return res.status(200).json({ data: { status: "error", message: "Failed to parse items JSON" } });
+            }
         }
 
-        const search =
-            String(item_id_user_input).trim().toLowerCase();
-
-
-        /* =========================================================
-           EXIT COMMANDS
-           ========================================================= */
-
-        const exitCommands = [
-            "exit",
-            "cancel",
-            "quit",
-            "stop",
-            "back",
-            "menu",
-            "end",
-            "done",
-            "bye",
-            "goodbye",
-            "never mind",
-            "nevermind",
-            "forget it",
-            "no thanks",
-            "no thank you"
-        ];
-
-        if (exitCommands.includes(search)) {
+        if (!Array.isArray(items_param) || !item_id_user_input || String(item_id_user_input).trim() === "") {
             return res.status(200).json({
-                success: true,
-                status: "exit",
-                match_type: "exit",
-                confidence: 1,
-                item_id: null,
-                item_name: null,
-                message: "User requested to exit."
+                data: { status: "not_found", message: "Missing item data requirements" }
             });
         }
 
+        const search = String(item_id_user_input).trim().toLowerCase();
 
-        /* =========================================================
-           EXACT ID MATCH
-           ========================================================= */
-
-        const idMatch = items_param.find(
-            item =>
-                String(item.id).toLowerCase() === search
-        );
-
+        // Exact ID Check
+        const idMatch = items_param.find(item => String(item.id).toLowerCase() === search);
         if (idMatch) {
             return res.status(200).json({
-                success: true,
-                status: "matched",
-                match_type: "id",
-                confidence: 1,
-                item_id: idMatch.id,
-                item_name:
-                    idMatch.display_name || idMatch.name
+                data: { success: true, status: "matched", match_type: "id", item_id: idMatch.id, item_name: idMatch.display_name || idMatch.name }
             });
         }
 
-
-        /* =========================================================
-           INDEX MATCH - 1 BASED
-           ========================================================= */
-
+        // Exact Index Check
         const index = Number(search);
-
-        if (
-            Number.isInteger(index) &&
-            index >= 1 &&
-            index <= items_param.length
-        ) {
+        if (Number.isInteger(index) && index >= 1 && index <= items_param.length) {
             const indexMatch = items_param[index - 1];
-
             return res.status(200).json({
-                success: true,
-                status: "matched",
-                match_type: "index",
-                confidence: 1,
-                item_index: index,
-                item_id: indexMatch.id,
-                item_name:
-                    indexMatch.display_name || indexMatch.name
+                data: { success: true, status: "matched", match_type: "index", item_id: indexMatch.id, item_name: indexMatch.display_name || indexMatch.name }
             });
         }
 
-
-        /* =========================================================
-           EXACT NAME MATCH
-           ========================================================= */
-
-        const exactMatch = items_param.find(
-            item =>
-                (item.display_name || item.name || "")
-                    .toLowerCase()
-                    .trim() === search
-        );
-
-        if (exactMatch) {
-            return res.status(200).json({
-                success: true,
-                status: "matched",
-                match_type: "exact",
-                confidence: 1,
-                item_id: exactMatch.id,
-                item_name:
-                    exactMatch.display_name || exactMatch.name
-            });
-        }
-
-
-        /* =========================================================
-           FUZZY MATCHING
-           ========================================================= */
-
-        const FUZZY_THRESHOLD = 0.35;
-
+        // Fuzzy Item Matching Check
         const fuse = new Fuse(items_param, {
             keys: ["display_name", "name"],
-            threshold: FUZZY_THRESHOLD,
+            threshold: 0.35,
             includeScore: true,
             ignoreLocation: true
         });
 
         const results = fuse.search(search);
-
-        if (results.length > 0) {
-
+        if (results.length > 0 && results[0].score <= 0.35) {
             const best = results[0];
-
-            // Fuse score:
-            // 0 = perfect match
-            // higher = worse match
-            const score =
-                typeof best.score === "number"
-                    ? best.score
-                    : 1;
-
-            // IMPORTANT:
-            // Only accept the result if its score is actually
-            // within our allowed threshold.
-            if (score <= FUZZY_THRESHOLD) {
-
-                return res.status(200).json({
+            return res.status(200).json({
+                data: {
                     success: true,
                     status: "matched",
                     match_type: "fuzzy",
-                    confidence:
-                        Number((1 - score).toFixed(2)),
+                    confidence: Number((1 - best.score).toFixed(2)),
                     item_id: best.item.id,
-                    item_name:
-                        best.item.display_name ||
-                        best.item.name
-                });
-            }
+                    item_name: best.item.display_name || best.item.name
+                }
+            });
         }
 
-
-        /* =========================================================
-           NO MATCH
-           ========================================================= */
-
+        // Base Global Fallback
         return res.status(200).json({
-            success: true,
-            status: "not_found",
-            match_type: "none",
-            confidence: 0,
-            item_id: null,
-            item_name: null,
-            message: "Item not found"
+            data: {
+                success: true,
+                status: "not_found",
+                match_type: "none",
+                confidence: 0,
+                message: "Item entity not found"
+            }
         });
 
-
     } catch (err) {
-
-        return res.status(500).json({
-            success: false,
-            status: "error",
-            message: err.message,
-            stack: err.stack
+        return res.status(200).json({
+            data: { status: "error", message: err.message }
         });
     }
 }
