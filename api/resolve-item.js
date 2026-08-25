@@ -45,13 +45,13 @@ export default async function handler(req, res) {
         }
 
         /* =========================================================
-           2. NUMERIC INDEX LOOKUP SELECTION
+           2. NUMERIC INDEX LOOKUP SELECTION (e.g. "7")
            ========================================================= */
         const numericIndex = Number(searchInput);
 
-        if (Number.isInteger(numericIndex)) {
+        if (!isNaN(numericIndex) && Number.isInteger(numericIndex)) {
             // Pick the correct active array data layer dynamically
-            const activeCatalog = universal_restdata_data || items_param;
+            const activeCatalog = universal_restdata_data !== undefined ? universal_restdata_data : items_param;
             let catalogArray = [];
 
             if (typeof activeCatalog === "string") {
@@ -89,7 +89,7 @@ export default async function handler(req, res) {
         /* =========================================================
            3. FUZZY TEXT CATALOG LOOKUP
            ========================================================= */
-        const targetCatalog = universal_restdata_data || items_param;
+        const targetCatalog = universal_restdata_data !== undefined ? universal_restdata_data : items_param;
         let textCatalogArray = [];
 
         if (typeof targetCatalog === "string") {
@@ -108,25 +108,27 @@ export default async function handler(req, res) {
 
             const results = fuse.search(searchInput);
 
-            if (results.length > 0 && results[0].score <= 0.35) {
-                const best = results[0];
-                const matchedPayload = {
-                    success: true,
-                    status: "matched",
-                    match_type: "fuzzy",
-                    confidence: Number((1 - best.score).toFixed(2)),
-                    restaurant_id: best.item.restaurant_id || null,
-                    restaurant_name: best.item.restaurant_name || null,
-                    dish_name: best.item.dish_name || best.item.name || null,
-                    item_id: best.item.id || null,
-                    item_name: best.item.display_name || best.item.name || null
-                };
-                return res.status(200).json({ ...matchedPayload, data: matchedPayload });
+            if (results.length > 0) {
+                const best = results[0]; // Access index 0 correctly
+                if (best.score <= 0.35) {
+                    const matchedPayload = {
+                        success: true,
+                        status: "matched",
+                        match_type: "fuzzy",
+                        confidence: Number((1 - best.score).toFixed(2)),
+                        restaurant_id: best.item.restaurant_id || null,
+                        restaurant_name: best.item.restaurant_name || null,
+                        dish_name: best.item.dish_name || best.item.name || null,
+                        item_id: best.item.id || null,
+                        item_name: best.item.display_name || best.item.name || best.item.restaurant_name || null
+                    };
+                    return res.status(200).json({ ...matchedPayload, data: matchedPayload });
+                }
             }
         }
 
         /* =========================================================
-           4. GLOBAL NOT FOUND FALLBACK (Gibberish handling like "kkkkkk")
+           4. GLOBAL NOT FOUND FALLBACK (Gibberish)
            ========================================================= */
         const fallbackPayload = {
             success: true,
