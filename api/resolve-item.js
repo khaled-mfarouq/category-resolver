@@ -39,7 +39,7 @@ export default async function handler(req, res) {
             String(restaurant_choice).trim() !== ""
         ) {
 
-            /* Zendesk may send the array as a JSON string */
+            // Zendesk may send the array as a JSON string
             if (typeof universal_restdata_data === "string") {
                 try {
                     universal_restdata_data =
@@ -124,7 +124,7 @@ export default async function handler(req, res) {
                         selectedRestaurant.dish_name
                 },
 
-                // Also return the important values at the top level
+                // Also return important values at the top level
                 // so Zendesk can easily store them as session parameters.
                 restaurant_id:
                     selectedRestaurant.restaurant_id,
@@ -148,10 +148,10 @@ export default async function handler(req, res) {
 
 
         /* =========================================================
-           EXISTING ITEM RESOLVER
+           ITEM RESOLVER
            ========================================================= */
 
-        /* Zendesk sends arrays as JSON strings */
+        // Zendesk sends arrays as JSON strings
         if (typeof items_param === "string") {
             try {
                 items_param = JSON.parse(items_param);
@@ -177,7 +177,11 @@ export default async function handler(req, res) {
             });
         }
 
-        if (!item_id_user_input) {
+        if (
+            item_id_user_input === undefined ||
+            item_id_user_input === null ||
+            String(item_id_user_input).trim() === ""
+        ) {
             return res.status(400).json({
                 success: false,
                 message: "item_id_user_input is required"
@@ -188,9 +192,9 @@ export default async function handler(req, res) {
             String(item_id_user_input).trim().toLowerCase();
 
 
-        /* ==========================
-           Exit commands
-           ========================== */
+        /* =========================================================
+           EXIT COMMANDS
+           ========================================================= */
 
         const exitCommands = [
             "exit",
@@ -214,14 +218,18 @@ export default async function handler(req, res) {
             return res.status(200).json({
                 success: true,
                 status: "exit",
+                match_type: "exit",
+                confidence: 1,
+                item_id: null,
+                item_name: null,
                 message: "User requested to exit."
             });
         }
 
 
-        /* ==========================
-           Exact ID match
-           ========================== */
+        /* =========================================================
+           EXACT ID MATCH
+           ========================================================= */
 
         const idMatch = items_param.find(
             item =>
@@ -241,9 +249,9 @@ export default async function handler(req, res) {
         }
 
 
-        /* ==========================
-           Index match (1-based)
-           ========================== */
+        /* =========================================================
+           INDEX MATCH - 1 BASED
+           ========================================================= */
 
         const index = Number(search);
 
@@ -267,9 +275,9 @@ export default async function handler(req, res) {
         }
 
 
-        /* ==========================
-           Exact name match
-           ========================== */
+        /* =========================================================
+           EXACT NAME MATCH
+           ========================================================= */
 
         const exactMatch = items_param.find(
             item =>
@@ -291,13 +299,15 @@ export default async function handler(req, res) {
         }
 
 
-        /* ==========================
-           Fuzzy matching
-           ========================== */
+        /* =========================================================
+           FUZZY MATCHING
+           ========================================================= */
+
+        const FUZZY_THRESHOLD = 0.35;
 
         const fuse = new Fuse(items_param, {
             keys: ["display_name", "name"],
-            threshold: 0.35,
+            threshold: FUZZY_THRESHOLD,
             includeScore: true,
             ignoreLocation: true
         });
@@ -305,37 +315,57 @@ export default async function handler(req, res) {
         const results = fuse.search(search);
 
         if (results.length > 0) {
+
             const best = results[0];
 
-            return res.status(200).json({
-                success: true,
-                status: "matched",
-                match_type: "fuzzy",
-                confidence:
-                    Number(
-                        (1 - (best.score || 0)).toFixed(2)
-                    ),
-                item_id: best.item.id,
-                item_name:
-                    best.item.display_name ||
-                    best.item.name
-            });
+            // Fuse score:
+            // 0 = perfect match
+            // higher = worse match
+            const score =
+                typeof best.score === "number"
+                    ? best.score
+                    : 1;
+
+            // IMPORTANT:
+            // Only accept the result if its score is actually
+            // within our allowed threshold.
+            if (score <= FUZZY_THRESHOLD) {
+
+                return res.status(200).json({
+                    success: true,
+                    status: "matched",
+                    match_type: "fuzzy",
+                    confidence:
+                        Number((1 - score).toFixed(2)),
+                    item_id: best.item.id,
+                    item_name:
+                        best.item.display_name ||
+                        best.item.name
+                });
+            }
         }
 
 
-        /* ==========================
-           No match
-           ========================== */
+        /* =========================================================
+           NO MATCH
+           ========================================================= */
 
         return res.status(200).json({
             success: true,
             status: "not_found",
+            match_type: "none",
+            confidence: 0,
+            item_id: null,
+            item_name: null,
             message: "Item not found"
         });
 
+
     } catch (err) {
+
         return res.status(500).json({
             success: false,
+            status: "error",
             message: err.message,
             stack: err.stack
         });
