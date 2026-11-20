@@ -1,246 +1,213 @@
 
 'use strict';
 
-const http = require('node:http');
-const { randomBytes, timingSafeEqual } = require('node:crypto');
+// Vercel OAuth 2.0 Proxy for Digital Hotelier
+// Node.js 22+ — No external packages required
 
-const PORT = Number(process.env.PORT || 3000);
+const { createHmac, timingSafeEqual } = require('node:crypto');
 
 const CLIENT_ID = process.env.OAUTH_CLIENT_ID;
 const CLIENT_SECRET = process.env.OAUTH_CLIENT_SECRET;
 const UPSTREAM_TOKEN = process.env.DIGITAL_HOTELIER_TOKEN;
+const SIGNING_SECRET = process.env.OAUTH_SIGNING_SECRET;
 
-const TOKEN_LIFETIME_SECONDS = 3600;
-const tokens = new Map();
+const TTL = 3600;
 
-if (!CLIENT_ID || !CLIENT_SECRET || !UPSTREAM_TOKEN) {
-  console.error(
-    'Set OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET and DIGITAL_HOTELIER_TOKEN.'
-  );
-  process.exit(1);
+// JSON response helper
+function respond(res, code, body) {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  return res.status(code).json(body);
 }
 
-function reply(res, status, value, extra = {}) {
-  res.writeHead(status, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Cache-Control': 'no-store',
-    'X-Content-Type-Options': 'nosniff',
-    ...extra
-  });
-  res.end(JSON.stringify(value));
+// Secure string comparison
+function same(a, b) {
+  const aa = Buffer.from(String(a || ''));
+  const bb = Buffer.from(String(b || ''));
+
+  return aa.length === bb.length &&
+    timingSafeEqual(aa, bb);
 }
 
-function equal(a, b) {
-  const x = Buffer.from(String(a));
-  const y = Buffer.from(String(b));
-  return x.length === y.length && timingSafeEqual(x, y);
+// Sign OAuth access token
+function sign(content) {
+  return createHmac('sha256', SIGNING_SECRET)
+    .update(content)
+    .digest('base64url');
 }
 
-function bearerToken(req) {
+// Generate signed, expiring OAuth token
+function issueToken() {
+  const payload = Buffer.from(JSON.stringify({
+    sub: CLIENT_ID,
+    exp: Math.floor(Date.now() / 1000) + TTL
+  })).toString('base64url');
+
+  return `${payload}.${sign(payload)}`;
+}
+
+// Validate OAuth access token
+function validToken(req) {
   const match = /^Bearer\s+(\S+)$/i.exec(
     req.headers.authorization || ''
   );
 
-  if (!match) return null;
+  if (!match) return false;
 
-  const expiry = tokens.get(match[1]);
+  const parts = match[1].split('.');
 
-  if (!expiry || expiry <= Date.now()) {
-    if (expiry) tokens.delete(match[1]);
-    return null;
+  if (parts.length !== 2 ||
+      !same(parts[1], sign(parts[0]))) {
+    return false;
   }
-
-  return match[1];
-}
-
-async function readBody(req, limit = 8192) {
-  let result = '';
-
-  for await (const chunk of req) {
-    result += chunk.toString('utf8');
-
-    if (Buffer.byteLength(result) > limit) {
-      throw new Error('request_too_large');
-    }
-  }
-
-  return result;
-}
-
-// OAuth 2.0 Client Credentials endpoint
-async function tokenEndpoint(req, res) {
-  let data;
 
   try {
-    data = new URLSearchParams(await readBody(req));
-  } catch {
-    return reply(res, 400, { error: 'invalid_request' });
-  }
+    const data = JSON.parse(
+      Buffer.from(parts[0], 'base64url').toString()
+    );
 
-  if (data.get('grant_type') !== 'client_credentials') {
-    return reply(res, 400, {
-      error: 'unsupported_grant_type'
+    return data.sub === CLIENT_ID &&
+      Number.isSafeInteger(data.exp) &&
+      data.exp > Date.now() / 1000;
+
+  } catch {
+    return false;
+  }
+}
+
+// Vercel Serverless Function
+module.exports = async function handler(req, res) {
+
+  if (!CLIENT_ID || !CLIENT_SECRET ||
+      !UPSTREAM_TOKEN || !SIGNING_SECRET) {
+    return respond(res, 500, {
+      error: 'server_configuration_missing'
     });
   }
 
-  let id = data.get('client_id') || '';
-  let secret = data.get('client_secret') || '';
+  const url = new URL(req.url, 'https://example.invalid');
+  const operation = url.searchParams.get('operation');
 
-  const basic = /^Basic\s+(.+)$/i.exec(
-    req.headers.authorization || ''
-  );
+  // HEALTH CHECK
+  if (req.method === 'GET' && operation === 'health') {
+    return respond(res, 200, { status: 'ok' });
+  }
 
-  if (basic) {
-    try {
-      const decoded = Buffer.from(
-        basic[1], 'base64'
-      ).toString('utf8');
+  // OAUTH 2.0 TOKEN GENERATION
+  if (req.method === 'POST' && operation === 'token') {
 
-      const separator = decoded.indexOf(':');
+    let body;
 
-      if (separator < 0) throw new Error('invalid_basic');
-
-      id = decodeURIComponent(
-        decoded.slice(0, separator).replace(/\+/g, '%20')
-      );
-
-      secret = decodeURIComponent(
-        decoded.slice(separator + 1).replace(/\+/g, '%20')
-      );
-    } catch {
-      return reply(res, 401,
-        { error: 'invalid_client' },
-        { 'WWW-Authenticate': 'Basic realm="oauth"' }
-      );
+    if (typeof req.body === 'string') {
+      body = new URLSearchParams(req.body);
+    } else if (req.body && typeof req.body === 'object') {
+      body = new URLSearchParams(req.body);
+    } else {
+      body = new URLSearchParams();
     }
-  }
 
-  if (!equal(id, CLIENT_ID) || !equal(secret, CLIENT_SECRET)) {
-    return reply(res, 401,
-      { error: 'invalid_client' },
-      { 'WWW-Authenticate': 'Basic realm="oauth"' }
-    );
-  }
-
-  const token = randomBytes(32).toString('base64url');
-
-  tokens.set(
-    token,
-    Date.now() + TOKEN_LIFETIME_SECONDS * 1000
-  );
-
-  if (tokens.size > 1000) {
-    for (const [key, expiry] of tokens) {
-      if (expiry <= Date.now()) tokens.delete(key);
+    if (body.get('grant_type') !== 'client_credentials') {
+      return respond(res, 400, {
+        error: 'unsupported_grant_type'
+      });
     }
-  }
 
-  return reply(res, 200, {
-    access_token: token,
-    token_type: 'Bearer',
-    expires_in: TOKEN_LIFETIME_SECONDS
-  });
-}
+    let id = body.get('client_id') || '';
+    let secret = body.get('client_secret') || '';
 
-// Secured Digital Hotelier GET API
-async function itemsEndpoint(req, res, hotelId, requestUrl) {
-  if (!bearerToken(req)) {
-    return reply(res, 401,
-      { error: 'invalid_token' },
-      {
-        'WWW-Authenticate':
-          'Bearer realm="hotelier", error="invalid_token"'
-      }
+    const basic = /^Basic\s+(\S+)$/i.exec(
+      req.headers.authorization || ''
     );
-  }
 
-  const upstream = new URL(
-    `https://dashboard.thedigitalhotelier.com/api/feed-data/businesses/${hotelId}/items`
-  );
+    if (basic) {
+      try {
+        const pair = Buffer.from(
+          basic[1], 'base64'
+        ).toString('utf8');
 
-  for (const key of ['page', 'per_page']) {
-    const value = requestUrl.searchParams.get(key);
+        const colon = pair.indexOf(':');
 
-    if (value !== null) {
-      if (!/^\d{1,5}$/.test(value)) {
-        return reply(res, 400, {
-          error: 'invalid_pagination'
+        if (colon < 0) throw new Error('invalid');
+
+        id = decodeURIComponent(pair.slice(0, colon));
+        secret = decodeURIComponent(pair.slice(colon + 1));
+
+      } catch {
+        return respond(res, 401, {
+          error: 'invalid_client'
         });
       }
-      upstream.searchParams.set(key, value);
+    }
+
+    if (!same(id, CLIENT_ID) ||
+        !same(secret, CLIENT_SECRET)) {
+      return respond(res, 401, {
+        error: 'invalid_client'
+      });
+    }
+
+    return respond(res, 200, {
+      access_token: issueToken(),
+      token_type: 'Bearer',
+      expires_in: TTL
+    });
+  }
+
+  // DIGITAL HOTELIER ITEMS API
+  if (req.method === 'GET' && operation === 'items') {
+
+    if (!validToken(req)) {
+      return respond(res, 401, {
+        error: 'invalid_token'
+      });
+    }
+
+    const hotelId = url.searchParams.get('hotel_id');
+
+    if (!hotelId || !/^\d{1,12}$/.test(hotelId)) {
+      return respond(res, 400, {
+        error: 'invalid_hotel_id'
+      });
+    }
+
+    try {
+      const upstreamUrl =
+        `https://dashboard.thedigitalhotelier.com/api/feed-data/businesses/${hotelId}/items`;
+
+      const upstream = await fetch(upstreamUrl, {
+        headers: {
+          Authorization: `Bearer ${UPSTREAM_TOKEN}`,
+          Accept: 'application/json'
+        },
+        signal: AbortSignal.timeout(15000)
+      });
+
+      if (!upstream.ok) {
+        return respond(
+          res,
+          upstream.status === 404 ? 404 : 502,
+          {
+            error: 'upstream_failed',
+            upstream_status: upstream.status
+          }
+        );
+      }
+
+      const data = await upstream.json();
+
+      return respond(res, 200, data);
+
+    } catch (e) {
+      console.error('Upstream error:', e.message);
+
+      return respond(res, 502, {
+        error: 'upstream_unavailable_or_invalid_json'
+      });
     }
   }
 
-  try {
-    const response = await fetch(upstream, {
-      headers: {
-        Authorization: `Bearer ${UPSTREAM_TOKEN}`,
-        Accept: 'application/json'
-      },
-      signal: AbortSignal.timeout(15000)
-    });
-
-    if (!response.ok) {
-      console.error(
-        'Digital Hotelier returned:',
-        response.status
-      );
-
-      return reply(
-        res,
-        response.status === 404 ? 404 : 502,
-        {
-          error: 'upstream_request_failed',
-          upstream_status: response.status
-        }
-      );
-    }
-
-    const payload = await response.json();
-    return reply(res, 200, payload);
-
-  } catch (err) {
-    console.error(err.message);
-
-    return reply(res, 502, {
-      error: 'upstream_unavailable_or_invalid_json'
-    });
-  }
-}
-
-// HTTP server and routing
-const server = http.createServer(async (req, res) => {
-  try {
-    const url = new URL(req.url, 'http://localhost');
-
-    if (req.method === 'GET' && url.pathname === '/health') {
-      return reply(res, 200, { status: 'ok' });
-    }
-
-    if (req.method === 'POST' &&
-        url.pathname === '/oauth/token') {
-      return await tokenEndpoint(req, res);
-    }
-
-    const match =
-      /^\/api\/feed-data\/businesses\/(\d+)\/items\/?$/
-      .exec(url.pathname);
-
-    if (req.method === 'GET' && match) {
-      return await itemsEndpoint(req, res, match[1], url);
-    }
-
-    return reply(res, 404, { error: 'not_found' });
-
-  } catch (err) {
-    console.error(err.message);
-
-    return reply(res, 500, {
-      error: 'internal_server_error'
-    });
-  }
-});
-
-server.listen(PORT, () => {
-  console.log(`OAuth proxy listening on port ${PORT}`);
-});
+  return respond(res, 404, {
+    error: 'not_found',
+    hint: 'Use ?operation=token (POST) or ?operation=items&hotel_id=1 (GET)'
+  });
+};
