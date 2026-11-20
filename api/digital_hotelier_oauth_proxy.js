@@ -179,7 +179,7 @@ module.exports = async function handler(req, res) {
           Authorization: `Bearer ${UPSTREAM_TOKEN}`,
           Accept: 'application/json'
         },
-        signal: AbortSignal.timeout(15000)
+        signal: AbortSignal.timeout(60000)
       });
 
       if (!upstream.ok) {
